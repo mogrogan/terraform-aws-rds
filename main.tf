@@ -136,23 +136,3 @@ resource "null_resource" "ssm_parameter" {
   }
 }
 
-# Outputs to simulate AWS module outputs
-output "vpc_id" {
-  value = null_resource.vpc.triggers.vpc_id
-}
-
-output "subnet_ids" {
-  value = jsondecode(null_resource.vpc.triggers.subnet_ids)
-}
-
-output "rds_endpoint" {
-  value = null_resource.rds_instance.triggers.endpoint
-}
-
-output "rds_identifier" {
-  value = null_resource.rds_instance.triggers.identifier
-}
-
-output "security_group_id" {
-  value = null_resource.security_group.triggers.sg_id
-}

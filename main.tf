@@ -1,69 +1,88 @@
 # Copyright (c) HashiCorp, Inc.
 # SPDX-License-Identifier: MPL-2.0
 
-provider "aws" {
-  region = var.region
-
-  default_tags {
-    tags = {
-      HashiCorpLearnTutorial = "no-code-modules"
+terraform {
+  required_providers {
+    null = {
+      source  = "hashicorp/null"
+      version = "~> 3.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.0"
     }
   }
 }
 
 provider "random" {}
-
-data "aws_availability_zones" "available" {}
+provider "null" {}
 
 resource "random_pet" "random" {}
 
-module "vpc" {
-  source  = "terraform-aws-modules/vpc/aws"
-  version = "5.19.0"
-
-  name                 = "${random_pet.random.id}-education"
-  cidr                 = "10.0.0.0/16"
-  azs                  = data.aws_availability_zones.available.names
-  public_subnets       = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
-  enable_dns_hostnames = true
-  enable_dns_support   = true
+# Mock availability zones
+locals {
+  mock_azs = ["us-east-1a", "us-east-1b", "us-east-1c"]
+  region   = var.region
 }
 
-resource "aws_db_subnet_group" "education" {
-  name       = "${random_pet.random.id}-education"
-  subnet_ids = module.vpc.public_subnets
+# Mock VPC
+resource "null_resource" "vpc" {
+  triggers = {
+    name        = "${random_pet.random.id}-education"
+    cidr        = "10.0.0.0/16"
+    azs         = jsonencode(local.mock_azs)
+    vpc_id      = "vpc-${random_pet.random.id}"
+    subnet_ids  = jsonencode([
+      "subnet-${random_pet.random.id}-1",
+      "subnet-${random_pet.random.id}-2",
+      "subnet-${random_pet.random.id}-3"
+    ])
+  }
 
-  tags = {
-    Name = "${random_pet.random.id} Education"
+  provisioner "local-exec" {
+    command = "echo 'Mock VPC created: ${self.triggers.vpc_id}'"
   }
 }
 
-resource "aws_security_group" "rds" {
-  name   = "${random_pet.random.id}-education_rds"
-  vpc_id = module.vpc.vpc_id
-
-  ingress {
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = ["192.80.0.0/16"]
+# Mock DB subnet group
+resource "null_resource" "db_subnet_group" {
+  triggers = {
+    name       = "${random_pet.random.id}-education"
+    subnet_ids = null_resource.vpc.triggers.subnet_ids
   }
 
-  egress {
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  provisioner "local-exec" {
+    command = "echo 'Mock DB Subnet Group created: ${self.triggers.name}'"
   }
 }
 
-resource "aws_db_parameter_group" "education" {
-  name   = "${random_pet.random.id}-education"
-  family = "postgres16"
+# Mock security group
+resource "null_resource" "security_group" {
+  triggers = {
+    name   = "${random_pet.random.id}-education_rds"
+    vpc_id = null_resource.vpc.triggers.vpc_id
+    ingress_from_port = 5432
+    ingress_to_port   = 5432
+    ingress_protocol  = "tcp"
+    ingress_cidr      = "192.80.0.0/16"
+    sg_id = "sg-${random_pet.random.id}"
+  }
 
-  parameter {
-    name  = "log_connections"
-    value = "1"
+  provisioner "local-exec" {
+    command = "echo 'Mock Security Group created: ${self.triggers.sg_id}'"
+  }
+}
+
+# Mock DB parameter group
+resource "null_resource" "db_parameter_group" {
+  triggers = {
+    name   = "${random_pet.random.id}-education"
+    family = "postgres16"
+    log_connections = "1"
+  }
+
+  provisioner "local-exec" {
+    command = "echo 'Mock DB Parameter Group created: ${self.triggers.name}'"
   }
 
   lifecycle {
@@ -77,32 +96,63 @@ ephemeral "random_password" "db_password" {
 }
 
 locals {
-  # Increment db_password_version to update the DB password and store the new
-  # password in SSM.
   db_password_version = 1
 }
 
-resource "aws_db_instance" "education" {
-  identifier             = "${var.db_name}-${random_pet.random.id}"
-  instance_class         = "db.t3.micro"
-  allocated_storage      = 5
-  apply_immediately      = true
-  engine                 = "postgres"
-  engine_version         = "16"
-  username               = var.db_username
-  password_wo            = ephemeral.random_password.db_password.result
-  password_wo_version    = local.db_password_version
-  db_subnet_group_name   = aws_db_subnet_group.education.name
-  vpc_security_group_ids = [aws_security_group.rds.id]
-  parameter_group_name   = aws_db_parameter_group.education.name
-  publicly_accessible    = true
-  skip_final_snapshot    = true
+# Mock RDS instance
+resource "null_resource" "rds_instance" {
+  triggers = {
+    identifier             = "${var.db_name}-${random_pet.random.id}"
+    instance_class         = "db.t3.micro"
+    allocated_storage      = "5"
+    engine                 = "postgres"
+    engine_version         = "16"
+    username               = var.db_username
+    password_version       = local.db_password_version
+    db_subnet_group_name   = null_resource.db_subnet_group.triggers.name
+    vpc_security_group_ids = null_resource.security_group.triggers.sg_id
+    parameter_group_name   = null_resource.db_parameter_group.triggers.name
+    endpoint               = "${var.db_name}-${random_pet.random.id}.mock-rds.amazonaws.com:5432"
+  }
+
+  provisioner "local-exec" {
+    command = "echo 'Mock RDS Instance created: ${self.triggers.endpoint}'"
+  }
 }
 
-resource "aws_ssm_parameter" "secret" {
-  name             = "/education/database/${var.db_name}/password/master"
-  description      = "Password for RDS database."
-  type             = "SecureString"
-  value_wo         = ephemeral.random_password.db_password.result
-  value_wo_version = local.db_password_version
+# Mock SSM parameter
+resource "null_resource" "ssm_parameter" {
+  triggers = {
+    name             = "/education/database/${var.db_name}/password/master"
+    description      = "Password for RDS database."
+    type             = "SecureString"
+    value_version    = local.db_password_version
+    # Note: We don't store the actual password in triggers for security
+    parameter_arn    = "arn:aws:ssm:${local.region}:123456789012:parameter/education/database/${var.db_name}/password/master"
+  }
+
+  provisioner "local-exec" {
+    command = "echo 'Mock SSM Parameter created: ${self.triggers.name}'"
+  }
+}
+
+# Outputs to simulate AWS module outputs
+output "vpc_id" {
+  value = null_resource.vpc.triggers.vpc_id
+}
+
+output "subnet_ids" {
+  value = jsondecode(null_resource.vpc.triggers.subnet_ids)
+}
+
+output "rds_endpoint" {
+  value = null_resource.rds_instance.triggers.endpoint
+}
+
+output "rds_identifier" {
+  value = null_resource.rds_instance.triggers.identifier
+}
+
+output "security_group_id" {
+  value = null_resource.security_group.triggers.sg_id
 }
